@@ -1,0 +1,16 @@
+name: clonearmy
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - pip
+  # sorted_nearest (used by pyranges) imports pkg_resources, removed in setuptools 81
+  - setuptools<81
+  - pysam>=0.22.0
+  - bwa
+  - samtools
+  - seqtk
+  - minimap2>=2.27
+  - pip:
+      - git+https://github.com/SemiQuant/cloneArmyInterrogate.git

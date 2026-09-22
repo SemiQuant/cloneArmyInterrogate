@@ -188,18 +188,6 @@ class AmpliconProcessor:
             self.aligner.mismatch_score = -1  # Reduced penalty
             self.aligner.open_gap_score = -2  # Reduced penalty
             self.aligner.extend_gap_score = -0.5  # Reduced penalty
-            self.aligner.target_internal_open_gap_score = -2
-            self.aligner.target_internal_extend_gap_score = -0.5
-            self.aligner.target_left_open_gap_score = -2
-            self.aligner.target_left_extend_gap_score = -0.5
-            self.aligner.target_right_open_gap_score = -2
-            self.aligner.target_right_extend_gap_score = -0.5
-            self.aligner.query_internal_open_gap_score = -2
-            self.aligner.query_internal_extend_gap_score = -0.5
-            self.aligner.query_left_open_gap_score = -2
-            self.aligner.query_left_extend_gap_score = -0.5
-            self.aligner.query_right_open_gap_score = -2
-            self.aligner.query_right_extend_gap_score = -0.5
             
             # First try score_only mode to check if alignment is possible
             try:

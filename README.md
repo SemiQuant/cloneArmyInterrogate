@@ -20,8 +20,58 @@ CloneArmy is a modern Python package for analyzing haplotypes from Illumina pair
 
 ## Installation
 
+### micromamba (recommended)
+
+The included [`environment.yml`](environment.yml) installs CloneArmy together with all command-line tools (bwa, samtools, seqtk, minimap2):
+
 ```bash
-pip install clonearmy
+git clone https://github.com/SemiQuant/cloneArmyInterrogate.git
+cd cloneArmyInterrogate
+micromamba create -f environment.yml
+micromamba activate clonearmy
+clonearmy --version
+```
+
+Or without cloning:
+
+```bash
+curl -LO https://raw.githubusercontent.com/SemiQuant/cloneArmyInterrogate/main/environment.yml
+micromamba create -f environment.yml
+micromamba activate clonearmy
+```
+
+To update CloneArmy in an existing environment:
+
+```bash
+micromamba activate clonearmy
+pip install --upgrade --force-reinstall --no-deps git+https://github.com/SemiQuant/cloneArmyInterrogate.git
+```
+
+For development, install from your clone in editable mode instead:
+
+```bash
+micromamba activate clonearmy
+pip install -e .
+```
+
+#### Dorado (Nanopore only)
+
+dorado is not available from conda/bioconda. Download the build for your platform from the [dorado releases](https://github.com/nanoporetech/dorado#installation), unpack it, and put its `bin/` on `PATH` (or pass `--dorado-bin` to `clonearmy nanopore`). For example, on Apple Silicon:
+
+```bash
+DORADO_VERSION=x.y.z   # latest version from the dorado releases page
+curl -LO https://cdn.oxfordnanoportal.com/software/analysis/dorado-${DORADO_VERSION}-osx-arm64.zip
+unzip dorado-${DORADO_VERSION}-osx-arm64.zip -d ~/software
+export PATH="$HOME/software/dorado-${DORADO_VERSION}-osx-arm64/bin:$PATH"
+dorado --version
+```
+
+Use `linux-x64` for Linux with an NVIDIA GPU. SUP basecalling needs a GPU (Apple Silicon Metal or NVIDIA CUDA).
+
+### pip
+
+```bash
+pip install git+https://github.com/SemiQuant/cloneArmyInterrogate.git
 ```
 
 ### Requirements
@@ -30,10 +80,11 @@ pip install clonearmy
 - BWA (must be installed and available in PATH)
 - Samtools (must be installed and available in PATH)
 - Seqtk (must be installed and available in PATH)
+- minimap2 ≥ 2.27 and dorado (Nanopore only)
 
-You can install the required tools using conda:
+If you are not using `environment.yml`, install the tools with micromamba:
 ```bash
-conda install -c bioconda bwa samtools seqtk
+micromamba install -c conda-forge -c bioconda bwa samtools seqtk minimap2
 ```
 
 ## Usage
@@ -80,13 +131,7 @@ clonearmy compare \
 
 The `nanopore` command takes raw POD5 data and basecalls it with dorado using the super-accurate (`sup`) model. dorado picks the newest SUP model that matches your flowcell and chemistry. The command can demultiplex by barcode kit, aligns the reads with minimap2, and then runs the same haplotype analysis and HTML report as the Illumina workflow.
 
-Additional requirements:
-
-```bash
-micromamba install -c bioconda minimap2 samtools
-```
-
-- [dorado](https://github.com/nanoporetech/dorado) must be on `PATH` (or passed with `--dorado-bin`). SUP basecalling needs a GPU: Apple Silicon (Metal) or NVIDIA (CUDA). SUP on CPU is impractically slow.
+Additional requirements: minimap2 (included in `environment.yml`) and [dorado](https://github.com/nanoporetech/dorado) on `PATH` or passed with `--dorado-bin` (see [Dorado installation](#dorado-nanopore-only)). SUP basecalling needs a GPU: Apple Silicon (Metal) or NVIDIA (CUDA). SUP on CPU is impractically slow.
 
 ```bash
 # Barcoded run: demultiplex with the kit and rename barcodes to sample names
