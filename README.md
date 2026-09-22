@@ -161,6 +161,9 @@ Key options:
 | `--ignore-homopolymer-indels` / `--keep-homopolymer-indels` | ignore | Handling of 1-bp indels in reference homopolymers |
 | `--homopolymer-min-length` | 3 | Minimum reference run length treated as a homopolymer |
 | `--force-basecall` | off | Redo basecalling and demultiplexing even if outputs exist |
+| `--full-length-tolerance` | 5 | Bases a read may miss at either reference end and still be full length |
+| `--depth-thresholds` | `1,2,3,5,10,20,50,100` | Minimum read depths for the single-mutant coverage table |
+| `--qc` / `--no-qc` | on | Read filtering, mutation load and depth-threshold tables |
 
 Nanopore error handling: even SUP reads carry a few errors per read, mostly homopolymer length errors. To keep these from fragmenting haplotype counts:
 - any base below `--min-base-quality` is replaced with the reference base;
@@ -169,11 +172,54 @@ Nanopore error handling: even SUP reads carry a few errors per read, mostly homo
 
 Basecalling output is written to `<output>/basecalling/` (`calls.bam`, `fastq/<sample>.fastq`), and re-running the command reuses it. `basecalling_summary.csv` holds reads, bases, mean length, mean Q and N50 per sample.
 
-An existing Nanopore BAM (for example from dorado with `--reference`, sorted and indexed) can be analyzed directly:
+An existing Nanopore BAM (for example from dorado with `--reference`, sorted and indexed) can be analyzed directly. This writes the haplotype tables, QC CSVs and HTML report, and can be re-run later with `clonearmy report`:
 
 ```bash
-clonearmy process-bam sample.bam reference.fasta --platform ont
+clonearmy process-bam sample.bam reference.fasta --platform ont -o results_ont
 ```
+
+#### QC and single-mutant coverage tables
+
+`run`, `nanopore` and `process-bam` now also print and save (turn off with `--no-qc`):
+
+- **Read filtering**: input reads, unmapped, mapped, supplementary (chimeras on Nanopore), low MAPQ, reads analysed, **full-length reads** (alignment spans the whole reference), full-length reads in haplotypes passing `--min-read-count`, read length, mean read Q, median alignment identity, and per-position depth (min/median/mean). Counts are reads for Nanopore and read pairs for Illumina.
+- **Mutations per read**: % of reads with 0, 1, 2, 3, 4 and 5+ mutations, for full-length reads and all reads.
+- **Single mutants by minimum read depth**: for each threshold in `--depth-thresholds` (default `1,2,3,5,10,20,50,100`), the number of haplotypes and reads kept, wild-type reads, and how many distinct single-mutation variants are supported by at least that many reads: SNVs (and % of the 3 × length possible), positions with an SNV, single deletions and insertions. For coding references (length divisible by 3, no internal stops) it adds synonymous SNVs, distinct missense amino-acid changes and nonsense codons, as % of those reachable by one nucleotide change. Computed separately for full-length reads and all reads.
+- **Single variants**: every single-mutation variant with its read and full-length read counts, codon and amino-acid change. The console shows the top variants; the full table is in `qc_single_variants.csv` and the HTML report.
+
+A read, or an Illumina read pair, is full length when its alignment starts within `--full-length-tolerance` bases (default 5) of the reference start and ends within that distance of the end, with no gap between mates. This matters for Nanopore: positions a truncated read does not cover are filled with the reference base, so without this check a partial read looks like a full-length wild-type or single-mutant read.
+
+#### Reporting on already processed results
+
+`clonearmy report` rebuilds the HTML report and all QC tables from an existing output directory (from `run`, `nanopore`, `process-bam` or `compare`) without re-aligning:
+
+```bash
+# Uses the settings stored by the run; per-sample BAMs are read for read statistics
+clonearmy report results_ont reference.fasta
+
+# Different depth thresholds, report written elsewhere
+clonearmy report results_ont reference.fasta -d 1,3,5,10,25,50,100,250 -o report_v2
+
+# Results from older CloneArmy versions: give the settings used for that run,
+# haplotypes are rebuilt from the BAMs and cached next to them
+clonearmy report results reference.fasta -q 25 -Q 20
+
+# Fast: existing haplotype CSVs only, no BAM access
+clonearmy report results reference.fasta --no-bam
+```
+
+Each run now writes `{sample}_haplotypes_all.csv.gz` (all haplotypes, no read-count filter) and `{sample}_parameters.json` (settings) next to the BAM. `report` reuses the unfiltered table when its settings match; if you change a setting that affects haplotype calling (base or mapping quality, homopolymer handling, indel size, full-length tolerance), or the table is missing, it rebuilds it from the BAM. Unset options fall back to the stored settings, then to platform defaults, and the source of each setting is shown in a table. Without a BAM (`--no-bam`, or older results whose BAM is gone), only the filtered `{sample}_haplotypes.csv` can be used, so per-read full-length status is unavailable and depth thresholds below the original `--min-read-count` are skipped.
+
+| Option | Default | Description |
+|---|---|---|
+| `--depth-thresholds`, `-d` | `1,2,3,5,10,20,50,100` | Minimum read depths for the single-mutant table |
+| `--sample`, `-s` | all | Only report these samples (repeatable) |
+| `--bam` | none | Aligned BAMs stored outside the results directory (repeatable) |
+| `--platform`, `-p` | stored / detected | `illumina` or `ont` |
+| `--min-read-count`, `-r` | stored / 10 | Haplotype filter for the haplotype table and plots |
+| `--reprocess` | off | Rebuild haplotype tables from BAMs even if cached tables match |
+| `--no-bam` | off | Use existing haplotype CSVs only |
+| `--no-read-stats` | off | Skip read length, Q, identity and depth statistics |
 
 ### Output Examples
 
@@ -248,9 +294,15 @@ comparison_results = run_comparative_analysis(
   - Read count
   - Frequency
   - Number of mutations
-  - Full-length status
+  - Full-length status (`is_full_length`, sequence based) and `full_length_count` (reads in the haplotype whose alignment spans the reference)
   - Quality metrics
+- `{sample}_haplotypes_all.csv.gz`: the same columns for all haplotypes (no `--min-read-count` filter)
+- `{sample}_parameters.json`: settings used, read by `clonearmy report`
+- In the output directory:
+  - `analysis_summary.csv`: the summary table
+  - `qc_read_filtering.csv`, `qc_mutation_load.csv`, `qc_depth_thresholds.csv`, `qc_single_variants.csv` (see [QC tables](#qc-and-single-mutant-coverage-tables))
 - Interactive HTML report with:
+  - Settings, read filtering, mutations per read, and single-mutant coverage by minimum read depth (table and plot)
   - Summary statistics
   - Mutation frequency plots
   - Position-based mutation diversity plots

@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 from typing import List, Dict, Generator, Tuple, Set, Union
+import json
 import logging
 from collections import Counter, defaultdict
 import re
@@ -20,6 +21,24 @@ import pyranges as pr
 
 logger = logging.getLogger(__name__)
 
+ALL_HAPLOTYPES_SUFFIX = '_haplotypes_all.csv.gz'
+HAPLOTYPES_SUFFIX = '_haplotypes.csv'
+PARAMS_SUFFIX = '_parameters.json'
+
+# Parameters that change the unfiltered haplotype table; a cached table is reused only if these match
+HAPLOTYPE_PARAMETERS = ('platform', 'min_base_quality', 'min_mapping_quality', 'max_indel_size',
+                        'ignore_homopolymer_indels', 'homopolymer_min_length',
+                        'max_homopolymer_indel', 'full_length_tolerance', 'reference_lengths')
+
+def full_length_read_count(df: pd.DataFrame) -> int:
+    """Reads whose alignment spans the reference; older tables without full_length_count fall
+    back to the sequence-based is_full_length flag."""
+    if df.empty:
+        return 0
+    if 'full_length_count' in df.columns and df['full_length_count'].notna().all():
+        return int(df['full_length_count'].sum())
+    return int(df.loc[df['is_full_length'].astype(bool), 'count'].sum())
+
 @dataclass
 class AmpliconRead:
     """Represents a processed amplicon read pair."""
@@ -28,6 +47,7 @@ class AmpliconRead:
     quality: float
     indels: List[Dict]  # Add indels field
     insertions: str = ''
+    full_length: bool = True
 
 class AmpliconProcessor:
     """Process amplicon sequencing data."""
@@ -44,7 +64,9 @@ class AmpliconProcessor:
                  minimap2_preset: str = "lr:hq",
                  ignore_homopolymer_indels: bool = True,
                  homopolymer_min_length: int = 3,
-                 max_homopolymer_indel: int = 1):
+                 max_homopolymer_indel: int = 1,
+                 full_length_tolerance: int = 5,
+                 check_dependencies: bool = True):
         """
         Initialize the processor.
         
@@ -61,6 +83,10 @@ class AmpliconProcessor:
             ignore_homopolymer_indels: (ONT) ignore short indels in reference homopolymer runs
             homopolymer_min_length: (ONT) minimum run length to treat as a homopolymer
             max_homopolymer_indel: (ONT) maximum indel size ignored within homopolymers
+            full_length_tolerance: a read (or read pair) is full length if its alignment starts
+                within this many bases of the reference start and ends within this many of the end
+            check_dependencies: check for aligners and build the BWA index (not needed when
+                only re-analysing existing BAMs)
         """
         platform = platform.lower()
         if platform not in ('illumina', 'ont'):
@@ -70,6 +96,7 @@ class AmpliconProcessor:
         self.ignore_homopolymer_indels = ignore_homopolymer_indels
         self.homopolymer_min_length = homopolymer_min_length
         self.max_homopolymer_indel = max_homopolymer_indel
+        self.full_length_tolerance = full_length_tolerance
         self.reference_path = Path(reference_path)
         self.bed_path = Path(bed_path) if bed_path else None
         self.min_base_quality = min_base_quality
@@ -108,9 +135,10 @@ class AmpliconProcessor:
         self._aligner_lock = threading.Lock()
         
         # Check for required executables and index files
-        self._check_dependencies()
-        if self.platform == 'illumina':
-            self._check_and_create_bwa_index()
+        if check_dependencies:
+            self._check_dependencies()
+            if self.platform == 'illumina':
+                self._check_and_create_bwa_index()
 
     def _load_reference(self) -> Dict[str, str]:
         """Load reference sequences."""
@@ -395,6 +423,24 @@ class AmpliconProcessor:
         
         return len_diff <= max_allowed_diff
 
+    def _spans_reference(self, reads, ref_len: int) -> bool:
+        """Whether the reads' alignments together cover the whole reference without gaps.
+
+        Positions no read covers are filled with the reference base during reconstruction,
+        so this, not the haplotype sequence, tells whether a read is truly full length.
+        """
+        tol = self.full_length_tolerance
+        intervals = sorted((r.reference_start, r.reference_end) for r in reads
+                           if r.reference_end is not None)
+        if not intervals or intervals[0][0] > tol:
+            return False
+        reach = intervals[0][1]
+        for start, end in intervals[1:]:
+            if start > reach:
+                return False
+            reach = max(reach, end)
+        return reach >= ref_len - tol
+
     def _get_read_pairs(self, 
                        bam: pysam.AlignmentFile,
                        ref_name: str) -> Generator[Tuple[pysam.AlignedSegment, pysam.AlignedSegment], None, None]:
@@ -419,9 +465,10 @@ class AmpliconProcessor:
                     fastq_r2: Path, 
                     temp_dir: Path,
                     output_dir: Path,
-                    threads: int) -> Path:
+                    threads: int,
+                    sample_name: str = None) -> Path:
         """Align reads using BWA-MEM and convert to sorted BAM."""
-        sample_name = fastq_r1.stem.replace("_R1_001.fastq", "")
+        sample_name = sample_name or fastq_r1.stem.replace("_R1_001.fastq", "")
         temp_sam = temp_dir / f"{sample_name}.sam"
         temp_bam = temp_dir / f"{sample_name}.temp.bam"
         final_bam = output_dir / f"{sample_name}.bam"
@@ -599,7 +646,8 @@ class AmpliconProcessor:
                              len(self.parse_insertions(insertions)))
                 yield AmpliconRead(sequence=sequence, mutations=mutations,
                                    quality=float(read.mapping_quality), indels=[],
-                                   insertions=insertions)
+                                   insertions=insertions,
+                                   full_length=self._spans_reference((read,), len(ref_seq)))
 
     def _process_alignments(self, 
                           bam_path: Path,
@@ -664,7 +712,9 @@ class AmpliconProcessor:
                         bar.update(1)
                         
                         yield AmpliconRead(sequence=sequence, mutations=mutations, quality=quality,
-                                           indels=[], insertions=insertions)
+                                           indels=[], insertions=insertions,
+                                           full_length=self._spans_reference((read1, read2),
+                                                                             len(ref_seq)))
                     else:
                         read_pairs[qname] = read
             
@@ -799,9 +849,11 @@ class AmpliconProcessor:
 
     def _analyze_amplicons(self,
                           amplicon_reads: List[AmpliconRead],
-                          ref_name: str) -> List[Dict]:
-        """Analyze processed amplicon reads."""
+                          ref_name: str,
+                          min_count: int = None) -> List[Dict]:
+        """Analyze processed amplicon reads (haplotypes below min_count, default min_read_count, are dropped)."""
         results = []
+        min_count = self.min_read_count if min_count is None else min_count
         
         if not amplicon_reads:
             logger.warning(f"No valid reads found for reference {ref_name}")
@@ -809,6 +861,8 @@ class AmpliconProcessor:
         
         # Count total reads and calculate initial statistics
         haplotype_counts = Counter((read.sequence, read.insertions) for read in amplicon_reads)
+        full_length_counts = Counter((read.sequence, read.insertions) for read in amplicon_reads
+                                     if read.full_length)
         total_reads = sum(haplotype_counts.values())
         ref_seq = self.reference[ref_name].upper()
         
@@ -816,10 +870,10 @@ class AmpliconProcessor:
         
         # Filter by minimum read count
         filtered_haplotypes = {seq: count for seq, count in haplotype_counts.items() 
-                             if count >= self.min_read_count}
+                             if count >= min_count}
         
         if not filtered_haplotypes:
-            logger.warning(f"No haplotypes met minimum read count threshold ({self.min_read_count}) for {ref_name}")
+            logger.warning(f"No haplotypes met minimum read count threshold ({min_count}) for {ref_name}")
             return results
             
         # Calculate statistics for filtered haplotypes
@@ -868,7 +922,8 @@ class AmpliconProcessor:
                 'snp_count': snp_count,
                 'indel_count': indel_count,
                 'is_full_length': is_full_length,
-                'theoretical_max_snps': theoretical_max_snps
+                'theoretical_max_snps': theoretical_max_snps,
+                'full_length_count': full_length_counts.get((haplotype, insertions), 0)
             })
         
         return results
@@ -948,6 +1003,7 @@ class AmpliconProcessor:
             temp_dir = Path(temp_dir)
             try:
                 click.echo("Starting sample processing...")
+                sample_name = Path(fastq_r1).stem.replace("_R1_001.fastq", "")
                 # Downsample FASTQ files if needed
                 r1_size = fastq_r1.stat().st_size
                 r2_size = fastq_r2.stat().st_size
@@ -978,10 +1034,10 @@ class AmpliconProcessor:
                     fastq_r2 = temp_r2
                 
                 click.echo("Aligning reads...")
-                bam_path = self._align_reads(fastq_r1, fastq_r2, temp_dir, output_dir, threads)
+                bam_path = self._align_reads(fastq_r1, fastq_r2, temp_dir, output_dir, threads,
+                                             sample_name=sample_name)
                 click.echo("Alignment complete. Processing references...")
                 
-                sample_name = fastq_r1.stem.replace("_R1_001.fastq", "")
                 return self._results_from_bam(bam_path, output_dir, sample_name)
                 
             except Exception as e:
@@ -1008,45 +1064,126 @@ class AmpliconProcessor:
                 logger.error(f"Error processing Nanopore sample {sample_name}: {str(e)}")
                 return self._empty_results()
 
-    @staticmethod
-    def _empty_results() -> pd.DataFrame:
-        return pd.DataFrame(columns=['reference', 'haplotype', 'insertions', 'count', 'frequency',
-                                     'mutations', 'snp_count', 'indel_count', 'is_full_length', 'theoretical_max_snps'])
+    RESULT_COLUMNS = ['reference', 'haplotype', 'insertions', 'count', 'frequency',
+                      'mutations', 'snp_count', 'indel_count', 'is_full_length',
+                      'theoretical_max_snps', 'full_length_count']
 
-    def _results_from_bam(self,
-                          bam_path: Path,
-                          output_dir: Path,
-                          sample_name: str) -> pd.DataFrame:
-        """Analyze haplotypes for every reference in an aligned BAM and write the results CSV."""
+    @classmethod
+    def _empty_results(cls) -> pd.DataFrame:
+        return pd.DataFrame(columns=cls.RESULT_COLUMNS)
+
+    def processing_parameters(self, bam_path: Union[str, Path] = None) -> Dict:
+        """Settings used to build haplotype tables (stored next to them for `clonearmy report`)."""
+        from . import __version__
+        params = {
+            'platform': self.platform,
+            'min_base_quality': self.min_base_quality,
+            'min_mapping_quality': self.min_mapping_quality,
+            'min_read_count': self.min_read_count,
+            'max_indel_size': self.max_indel_size,
+            'ignore_homopolymer_indels': self.ignore_homopolymer_indels,
+            'homopolymer_min_length': self.homopolymer_min_length,
+            'max_homopolymer_indel': self.max_homopolymer_indel,
+            'full_length_tolerance': self.full_length_tolerance,
+            'reference': str(self.reference_path.resolve()),
+            'reference_lengths': {name: len(seq) for name, seq in self.reference.items()},
+            'clonearmy_version': __version__,
+        }
+        if bam_path is not None:
+            params['bam'] = str(Path(bam_path).resolve())
+        return params
+
+    def haplotype_table(self, bam_path: Path) -> pd.DataFrame:
+        """All haplotypes (count >= 1) for every reference in an aligned BAM.
+
+        Frequencies are relative to all analysed reads of the haplotype's reference.
+        """
         results = []
-        ref_count = len(self.reference)
-
         with click.progressbar(self.reference.items(),
-                             length=ref_count,
+                             length=len(self.reference),
                              label='Processing references') as refs:
             for ref_name, _ in refs:
                 click.echo(f"\nProcessing reference: {ref_name}")
                 amplicon_reads = list(self._process_alignments(bam_path, ref_name))
                 if amplicon_reads:
-                    click.echo(f"Found {len(amplicon_reads)} valid reads for {ref_name}")
-                    results.extend(self._analyze_amplicons(amplicon_reads, ref_name))
-
+                    full_length = sum(1 for r in amplicon_reads if r.full_length)
+                    click.echo(f"Found {len(amplicon_reads)} valid reads for {ref_name} "
+                               f"({full_length} full length)")
+                    results.extend(self._analyze_amplicons(amplicon_reads, ref_name, min_count=1))
         if not results:
+            return self._empty_results()
+        return pd.DataFrame(results, columns=self.RESULT_COLUMNS)
+
+    def write_haplotype_table(self, df: pd.DataFrame, output_dir: Path, sample_name: str,
+                              bam_path: Union[str, Path] = None) -> Path:
+        """Write the unfiltered haplotype table and the parameters that produced it."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"{sample_name}{ALL_HAPLOTYPES_SUFFIX}"
+        df.to_csv(path, index=False)
+        with open(output_dir / f"{sample_name}{PARAMS_SUFFIX}", 'w') as fh:
+            json.dump(self.processing_parameters(bam_path=bam_path), fh, indent=2)
+        return path
+
+    @staticmethod
+    def _ensure_bam_in_output(bam_path: Path, output_dir: Path) -> None:
+        """Symlink the aligned BAM (and its index) into output_dir when it lives elsewhere.
+
+        `clonearmy report` looks for per-sample BAMs next to the haplotype tables.
+        """
+        dest = output_dir / bam_path.name
+        if dest.resolve() == bam_path.resolve():
+            return
+        if not dest.exists():
+            dest.symlink_to(bam_path.resolve())
+        index = Path(str(bam_path) + '.bai')
+        dest_index = Path(str(dest) + '.bai')
+        if index.exists() and not dest_index.exists():
+            dest_index.symlink_to(index.resolve())
+        alt_index = bam_path.with_suffix('.bai')
+        dest_alt = dest.with_suffix('.bai')
+        if alt_index.exists() and alt_index != index and not dest_alt.exists():
+            dest_alt.symlink_to(alt_index.resolve())
+
+    def filter_haplotypes(self, all_df: pd.DataFrame, min_count: int = None) -> pd.DataFrame:
+        """Keep haplotypes with >= min_count reads (default min_read_count) and recompute
+        frequencies over the kept reads, as in `{sample}_haplotypes.csv`."""
+        min_count = self.min_read_count if min_count is None else min_count
+        if all_df.empty:
+            return self._empty_results()
+        df = all_df[all_df['count'] >= min_count].copy()
+        dropped = all_df['count'].sum() - df['count'].sum()
+        if dropped:
+            logger.info(f"Filtered out {len(all_df) - len(df)} haplotypes with < {min_count} "
+                        f"reads ({dropped:,} reads, {dropped / all_df['count'].sum() * 100:.1f}%)")
+        if df.empty:
+            return self._empty_results()
+        # Recalculate frequencies after filtering
+        df['frequency'] = (df['count'] / df['count'].sum()) * 100
+        return df
+
+    def _results_from_bam(self,
+                          bam_path: Path,
+                          output_dir: Path,
+                          sample_name: str) -> pd.DataFrame:
+        """Analyze haplotypes for every reference in an aligned BAM and write the results CSVs.
+
+        Writes the filtered `{sample}_haplotypes.csv` and the unfiltered
+        `{sample}_haplotypes_all.csv.gz` used for threshold and QC reporting.
+        """
+        self._ensure_bam_in_output(bam_path, output_dir)
+        all_df = self.haplotype_table(bam_path)
+        all_path = self.write_haplotype_table(all_df, output_dir, sample_name, bam_path=bam_path)
+        click.echo(f"Unfiltered haplotypes saved to {all_path}")
+
+        if all_df.empty:
             click.echo("No results found for any reference sequences")
             return self._empty_results()
 
-        df = pd.DataFrame(results)
-
-        # Filter by minimum read count
-        df = df[df['count'] >= self.min_read_count].copy()
-
+        df = self.filter_haplotypes(all_df)
         if df.empty:
             click.echo(f"No haplotypes met minimum read count threshold ({self.min_read_count})")
             return self._empty_results()
-
-        # Recalculate frequencies after filtering
-        total_reads = df['count'].sum()
-        df['frequency'] = (df['count'] / total_reads) * 100
 
         # Save results
         csv_path = output_dir / f"{sample_name}_haplotypes.csv"

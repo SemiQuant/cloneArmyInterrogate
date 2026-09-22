@@ -1,4 +1,4 @@
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import json
 from pathlib import Path
 import base64
@@ -26,7 +26,7 @@ plt.style.use('default')  # Use matplotlib's default style as a base
 # Disable interactive mode
 plt.ioff()
 
-from .processor import AmpliconProcessor
+from .processor import AmpliconProcessor, full_length_read_count
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +474,7 @@ def create_rv0678_analysis_table(results_df: pd.DataFrame) -> pd.DataFrame:
     
     max_frequency = (results_df['count'].max() / total_reads * 100)
     avg_mutations = (results_df['mutations'].astype(float) * results_df['count']).sum() / total_reads
-    full_length_reads = results_df[results_df['is_full_length']]['count'].sum()
+    full_length_reads = full_length_read_count(results_df)
     full_length_percent = (full_length_reads / total_reads * 100)
     
     # Create mutation distribution
@@ -524,7 +524,7 @@ def format_summary_table(results: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         avg_mutations = (df['mutations'].astype(float) * df['count']).sum() / total_reads if total_reads > 0 else 0.0
         
         # Full length statistics
-        full_length_reads = df[df['is_full_length']]['count'].sum()
+        full_length_reads = full_length_read_count(df)
         full_length_percent = (full_length_reads / total_reads * 100) if total_reads > 0 else 0.0
         
         # Single mutation statistics
@@ -532,7 +532,7 @@ def format_summary_table(results: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         single_mut_percent = (single_mut_reads / total_reads * 100) if total_reads > 0 else 0.0
         
         # Full length single mutations
-        full_length_single = df[(df['mutations'] == 1) & (df['is_full_length'])]['count'].sum()
+        full_length_single = full_length_read_count(df[df['mutations'] == 1])
         full_length_single_percent = (full_length_single / total_reads * 100) if total_reads > 0 else 0.0
         
         summary_data.append({
@@ -564,14 +564,78 @@ def format_summary_table(results: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     return summary_df
 
 
+def create_depth_threshold_plot(thresholds: pd.DataFrame) -> str:
+    """Line plot of single-SNV (and missense) coverage against the minimum read depth."""
+    if thresholds is None or thresholds.empty:
+        return ""
+    fig = go.Figure()
+    for (sample, ref, read_set), group in thresholds.groupby(['sample', 'reference', 'read_set']):
+        if read_set != 'full_length' and (thresholds['read_set'] == 'full_length').any():
+            continue
+        name = f"{sample} {ref}" if thresholds['reference'].nunique() > 1 else str(sample)
+        fig.add_trace(go.Scatter(x=group['min_depth'], y=group['snv_pct_of_possible'],
+                                 mode='lines+markers', name=f"{name} SNVs"))
+        if 'missense_pct_of_reachable' in group.columns and group['missense_pct_of_reachable'].notna().any():
+            fig.add_trace(go.Scatter(x=group['min_depth'], y=group['missense_pct_of_reachable'],
+                                     mode='lines+markers', line=dict(dash='dot'),
+                                     name=f"{name} missense aa"))
+    fig.update_layout(
+        title='Single-mutant coverage by minimum read depth',
+        xaxis=dict(title='Minimum reads supporting the variant', type='log'),
+        yaxis=dict(title='% of possible variants observed', range=[0, 100]),
+        width=900, height=450, template='plotly_white',
+        margin=dict(b=50, l=60, r=20, t=40),
+    )
+    return fig.to_html(full_html=False, include_plotlyjs='cdn', config={'displayModeBar': True})
+
+
+def _qc_html(df: pd.DataFrame) -> str:
+    if df is None or df.empty:
+        return ""
+    return df.to_html(index=False, na_rep='–', float_format=lambda x: f"{x:,.2f}")
+
+
+def _qc_sections(qc, parameters: Optional[Dict]) -> Dict[str, object]:
+    """Render QC tables for the report template."""
+    sections = {'parameters_table': '', 'basecalling_table': '', 'read_filtering_table': '',
+                'mutation_load_table': '', 'threshold_tables': [], 'threshold_plot': '',
+                'single_variants_table': '', 'qc_notes': [], 'sources_table': ''}
+    if parameters:
+        sections['parameters_table'] = _qc_html(pd.DataFrame(
+            [{'Setting': k, 'Value': json.dumps(v) if isinstance(v, (dict, list)) else v}
+             for k, v in parameters.items()]))
+    if qc is None:
+        return sections
+    sections['basecalling_table'] = _qc_html(qc.basecalling)
+    sections['read_filtering_table'] = _qc_html(qc.read_filtering)
+    sections['mutation_load_table'] = _qc_html(qc.mutation_load)
+    sections['sources_table'] = _qc_html(qc.sources)
+    sections['single_variants_table'] = _qc_html(qc.single_variants)
+    sections['qc_notes'] = list(qc.notes)
+    thresholds = qc.depth_thresholds
+    if not thresholds.empty:
+        sections['threshold_plot'] = create_depth_threshold_plot(thresholds)
+        for (sample, ref, read_set), group in thresholds.groupby(['sample', 'reference', 'read_set'],
+                                                                sort=False):
+            title = f"{sample} / {ref} ({'full-length reads' if read_set == 'full_length' else 'all reads'})"
+            sections['threshold_tables'].append(
+                {'title': title, 'html': _qc_html(group.drop(columns=['sample', 'reference', 'read_set']))})
+    return sections
+
+
 def generate_report(results: Dict[str, pd.DataFrame], 
                    summary: pd.DataFrame, 
                    output_path: Path,
-                   reference_seq: str):
-    """Generate HTML report with analysis results."""
+                   reference_seq: str,
+                   qc=None,
+                   parameters: Optional[Dict] = None):
+    """Generate HTML report with analysis results.
+
+    qc is an optional `clonearmy.qc.QCResult`; parameters are shown as run settings.
+    """
     try:
-        # Ensure we have results to process
-        if not results or all(df.empty for df in results.values()):
+        # Ensure we have results to process (QC tables alone are still worth reporting)
+        if (not results or all(df.empty for df in results.values())) and qc is None:
             logger.warning("No results to generate report from")
             with open(output_path, 'w') as f:
                 f.write("""
@@ -596,6 +660,7 @@ def generate_report(results: Dict[str, pd.DataFrame],
         position_plot = ""
         indel_plot = ""
         
+        results = results or {}
         # Only create plots if we have valid data
         for ref_name, df in results.items():
             if not df.empty and len(df) > 0:
@@ -624,15 +689,74 @@ def generate_report(results: Dict[str, pd.DataFrame],
                     th { background-color: #f5f5f5; }
                     .plot { margin: 20px 0; }
                     .warning { color: #856404; background-color: #fff3cd; padding: 10px; border-radius: 4px; }
+                    .scroll { overflow-x: auto; }
+                    .scroll table { font-size: 12px; }
+                    .scroll th, .scroll td { padding: 4px 6px; white-space: nowrap; }
+                    .note { color: #555; font-size: 13px; }
                 </style>
             </head>
             <body>
                 <h1>CloneArmy Analysis Report</h1>
                 <p>Generated on: {{ timestamp }}</p>
+
+                {% for note in qc_notes %}
+                <p class="warning">{{ note }}</p>
+                {% endfor %}
+
+                {% if parameters_table %}
+                <h2>Settings</h2>
+                <div class="scroll">{{ parameters_table | safe }}</div>
+                {% endif %}
                 
                 {% if summary_table is not none %}
                 <h2>Summary</h2>
                 {{ summary_table | safe }}
+                {% endif %}
+
+                {% if basecalling_table %}
+                <h2>Basecalling</h2>
+                <div class="scroll">{{ basecalling_table | safe }}</div>
+                {% endif %}
+
+                {% if read_filtering_table %}
+                <h2>Read Filtering</h2>
+                <p class="note">Counts are reads (Nanopore) or read pairs (Illumina). <i>analysed</i> passed
+                mapping and MAPQ filters; <i>full_length</i> is the subset whose alignment spans the whole
+                reference. Read Q and identity are per primary mapped read; depth is per reference position
+                from reads passing the filters, counting bases at or above the minimum base quality.</p>
+                <div class="scroll">{{ read_filtering_table | safe }}</div>
+                {% endif %}
+
+                {% if mutation_load_table %}
+                <h2>Mutations per Read</h2>
+                <p class="note">Percentage of reads with 0, 1, 2, ... mutations after base-quality masking
+                (and homopolymer indel filtering for Nanopore).</p>
+                <div class="scroll">{{ mutation_load_table | safe }}</div>
+                {% endif %}
+
+                {% if threshold_tables %}
+                <h2>Single Mutants by Minimum Read Depth</h2>
+                <p class="note">A single-mutant variant counts at a threshold when at least that many reads carry
+                exactly that one mutation. SNV % is of the 3 &times; length possible substitutions; position %
+                is of reference positions with at least one SNV. For coding references, missense % is of the
+                distinct amino-acid substitutions reachable by one nucleotide change.</p>
+                {% if threshold_plot %}<div class="plot">{{ threshold_plot | safe }}</div>{% endif %}
+                {% for t in threshold_tables %}
+                <h3>{{ t.title }}</h3>
+                <div class="scroll">{{ t.html | safe }}</div>
+                {% endfor %}
+                {% endif %}
+
+                {% if single_variants_table %}
+                <h2>Single Variants</h2>
+                <p class="note">Every haplotype with exactly one mutation, aggregated by variant.
+                <i>full_length_reads</i> is the subset whose alignment spans the reference.</p>
+                <div class="scroll">{{ single_variants_table | safe }}</div>
+                {% endif %}
+
+                {% if sources_table %}
+                <h2>Data Sources</h2>
+                <div class="scroll">{{ sources_table | safe }}</div>
                 {% endif %}
                 
                 {% if mutation_freq_plot %}
@@ -671,7 +795,8 @@ def generate_report(results: Dict[str, pd.DataFrame],
             mutation_freq_plot=mutation_freq_plot,
             mutation_spectrum=mutation_spectrum,
             position_plot=position_plot,
-            indel_plot=indel_plot
+            indel_plot=indel_plot,
+            **_qc_sections(qc, parameters)
         )
         
         # Write report

@@ -9,7 +9,7 @@ from functools import partial
 import multiprocessing
 import click
 
-from .processor import AmpliconProcessor
+from .processor import AmpliconProcessor, full_length_read_count
 from . import nanopore
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,8 @@ def process_samples(
     max_file_size: int = 10_000_000_000,
     bed_path: Union[str, Path, None] = None,
     max_indel_size: int = 50,
-    parallel_samples: int = None
+    parallel_samples: int = None,
+    full_length_tolerance: int = 5
 ) -> Tuple[Dict[str, pd.DataFrame], AmpliconProcessor]:
     """
     Process all samples in a directory.
@@ -42,6 +43,7 @@ def process_samples(
         bed_path: Optional path to BED file for indel comparison
         max_indel_size: Maximum size of indels to consider as small indels
         parallel_samples: Number of samples to process in parallel (default: min(4, CPU count))
+        full_length_tolerance: Bases a read pair may miss at either reference end and still be full length
 
     Returns:
         Tuple of (Dictionary mapping sample names to their results DataFrames, AmpliconProcessor)
@@ -66,7 +68,8 @@ def process_samples(
         min_mapping_quality=min_mapping_quality,
         min_read_count=min_read_count,
         max_file_size=max_file_size,
-        max_indel_size=max_indel_size
+        max_indel_size=max_indel_size,
+        full_length_tolerance=full_length_tolerance
     )
 
     def process_single_sample(r1_file: Path, processor: AmpliconProcessor) -> Tuple[str, pd.DataFrame]:
@@ -154,7 +157,8 @@ def process_nanopore_samples(
     minimap2_preset: str = 'lr:hq',
     ignore_homopolymer_indels: bool = True,
     homopolymer_min_length: int = 3,
-    parallel_samples: int = None
+    parallel_samples: int = None,
+    full_length_tolerance: int = 5
 ) -> Tuple[Dict[str, pd.DataFrame], AmpliconProcessor, pd.DataFrame]:
     """
     Basecall raw Nanopore POD5 data with dorado (SUP by default) and analyze haplotypes.
@@ -181,6 +185,7 @@ def process_nanopore_samples(
         ignore_homopolymer_indels: Ignore 1-bp indels in reference homopolymer runs
         homopolymer_min_length: Minimum run length treated as a homopolymer
         parallel_samples: Number of samples to process in parallel (default: min(4, CPU count))
+        full_length_tolerance: Bases a read may miss at either reference end and still be full length
 
     Returns:
         Tuple of (results per sample, AmpliconProcessor, basecalling summary DataFrame)
@@ -237,7 +242,8 @@ def process_nanopore_samples(
         platform='ont',
         minimap2_preset=minimap2_preset,
         ignore_homopolymer_indels=ignore_homopolymer_indels,
-        homopolymer_min_length=homopolymer_min_length
+        homopolymer_min_length=homopolymer_min_length,
+        full_length_tolerance=full_length_tolerance
     )
 
     def process_single_sample(sample_name: str, fastq: Path) -> Optional[Tuple[str, pd.DataFrame]]:
@@ -324,8 +330,8 @@ def summarize_results(results: Dict[str, pd.DataFrame], processor: Optional['Amp
                     'avg_mutations': (ref_df['mutations'] * ref_df['count']).sum() / ref_reads if ref_reads > 0 else 0,
                     'avg_snps': (ref_df['snp_count'] * ref_df['count']).sum() / ref_reads if ref_reads > 0 else 0,
                     'avg_indels': (ref_df['indel_count'] * ref_df['count']).sum() / ref_reads if ref_reads > 0 else 0,
-                    'full_length_reads': ref_df[ref_df['is_full_length']]['count'].sum(),
-                    'full_length_percent': (ref_df[ref_df['is_full_length']]['count'].sum() / ref_reads * 100) if ref_reads > 0 else 0,
+                    'full_length_reads': full_length_read_count(ref_df),
+                    'full_length_percent': (full_length_read_count(ref_df) / ref_reads * 100) if ref_reads > 0 else 0,
                     'theoretical_max_snps': theoretical_max_snps
                 })
             
@@ -341,8 +347,8 @@ def summarize_results(results: Dict[str, pd.DataFrame], processor: Optional['Amp
                 'avg_mutations': (df['mutations'] * df['count']).sum() / total_reads if total_reads > 0 else 0,
                 'avg_snps': (df['snp_count'] * df['count']).sum() / total_reads if total_reads > 0 else 0,
                 'avg_indels': (df['indel_count'] * df['count']).sum() / total_reads if total_reads > 0 else 0,
-                'full_length_reads': df[df['is_full_length']]['count'].sum(),
-                'full_length_percent': (df[df['is_full_length']]['count'].sum() / total_reads * 100) if total_reads > 0 else 0,
+                'full_length_reads': full_length_read_count(df),
+                'full_length_percent': (full_length_read_count(df) / total_reads * 100) if total_reads > 0 else 0,
                 'num_references': len(df['reference'].unique())
             }
             
@@ -437,8 +443,8 @@ def summarize_results(results: Dict[str, pd.DataFrame], processor: Optional['Amp
                 'avg_mutations': (ref_df['mutations'] * ref_df['count']).sum() / ref_reads if ref_reads > 0 else 0,
                 'avg_snps': (ref_df['snp_count'] * ref_df['count']).sum() / ref_reads if ref_reads > 0 else 0,
                 'avg_indels': (ref_df['indel_count'] * ref_df['count']).sum() / ref_reads if ref_reads > 0 else 0,
-                'full_length_reads': ref_df[ref_df['is_full_length']]['count'].sum(),
-                'full_length_percent': (ref_df[ref_df['is_full_length']]['count'].sum() / ref_reads * 100) if ref_reads > 0 else 0,
+                'full_length_reads': full_length_read_count(ref_df),
+                'full_length_percent': (full_length_read_count(ref_df) / ref_reads * 100) if ref_reads > 0 else 0,
                 'theoretical_max_snps': theoretical_max_snps
             })
         
@@ -454,8 +460,8 @@ def summarize_results(results: Dict[str, pd.DataFrame], processor: Optional['Amp
             'avg_mutations': (combined_df['mutations'] * combined_df['count']).sum() / total_reads if total_reads > 0 else 0,
             'avg_snps': (combined_df['snp_count'] * combined_df['count']).sum() / total_reads if total_reads > 0 else 0,
             'avg_indels': (combined_df['indel_count'] * combined_df['count']).sum() / total_reads if total_reads > 0 else 0,
-            'full_length_reads': combined_df[combined_df['is_full_length']]['count'].sum(),
-            'full_length_percent': (combined_df[combined_df['is_full_length']]['count'].sum() / total_reads * 100) if total_reads > 0 else 0,
+            'full_length_reads': full_length_read_count(combined_df),
+            'full_length_percent': (full_length_read_count(combined_df) / total_reads * 100) if total_reads > 0 else 0,
             'num_references': len(combined_df['reference'].unique())
         }
         
