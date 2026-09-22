@@ -1,0 +1,23 @@
+old/
+
+# Sequencing data and analysis outputs
+files/
+results/
+results_ont/
+*.fastq
+*.fastq.gz
+*.fq.gz
+*.pod5
+*.fast5
+*.bam
+*.bam.bai
+
+# Python build and cache
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store

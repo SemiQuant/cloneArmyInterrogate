@@ -1,0 +1,19 @@
+rm -rf results
+clonearmy run files/ refs/BDQclone.fasta \
+  -t 16 \
+  -o results \
+  --min-base-quality 25 \
+  --min-mapping-quality 20 \
+  --min-read-count 10 \
+  --max-indel-size 50 \
+  --max-file-size 1000000000000000
+
+# Nanopore: basecall POD5 with dorado SUP, demultiplex, and analyze
+clonearmy nanopore pod5/ refs/BDQclone.fasta \
+  -t 16 \
+  -o results_ont \
+  --kit-name SQK-NBD114-24 \
+  --min-base-quality 20 \
+  --min-mapping-quality 20 \
+  --min-read-count 10 \
+  --max-indel-size 50

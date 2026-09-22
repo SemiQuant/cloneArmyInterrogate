@@ -1,0 +1,80 @@
+[project]
+name = "clonearmy"
+version = "0.3.0"
+description = "Analyze haplotypes from Illumina paired-end and Oxford Nanopore amplicon sequencing"
+authors = [{name = "SemiQuant (Jason D Limberis)", email = "JasonLimberis@ucsf.edu"}]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = ["bioinformatics", "sequencing", "amplicon", "haplotype", "nanopore", "ont", "dorado"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Bio-Informatics"
+]
+dependencies = [
+    "pysam>=0.22.0",
+    "pandas>=2.1.0",
+    "click>=8.1.0",
+    "rich>=13.7.0",
+    "biopython>=1.81",
+    "jinja2>=3.1.0",
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    "networkx>=3.2.0",
+    "scipy>=1.11.0",
+    "numpy>=1.24.0",
+    "tqdm>=4.66.0",
+    "pyranges>=0.0.129",
+    "plotly>=5.18.0",
+    "statsmodels"
+]
+
+[build-system]
+requires = ["hatchling>=1.0.0"]
+build-backend = "hatchling.build"
+
+[project.urls]
+Documentation = "https://github.com/SemiQuant/clonearmy#readme"
+Source = "https://github.com/SemiQuant/clonearmy"
+
+[project.scripts]
+clonearmy = "clonearmy.cli:cli"
+
+[tool.hatch.version]
+path = "src/clonearmy/__init__.py"
+pattern = "__version__ = \"(?P<version>[^\"]+)\""
+
+[tool.hatch.build]
+include = [
+    "src/clonearmy/**/*.py",
+    "src/clonearmy/**/*.html",
+    "README.md",
+    "LICENSE",
+]
+exclude = [
+    "tests",
+    "docs",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/clonearmy"]
+artifacts = [
+    "src/clonearmy"
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/clonearmy",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
