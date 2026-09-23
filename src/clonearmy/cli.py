@@ -31,7 +31,7 @@ def _depths_callback(ctx, param, value):
 
 def _format_cell(value) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
-        return '–'
+        return '-'
     if isinstance(value, bool):
         return str(value)
     if isinstance(value, int) or (hasattr(value, 'dtype') and 'int' in str(value.dtype)):
@@ -791,8 +791,8 @@ def report(results_dir: str, reference: str, output: Optional[str], bams, sample
     for col in ('Sample', 'BAM', 'Unfiltered table', 'Filtered table'):
         found.add_column(col)
     for name, s in samples.items():
-        found.add_row(name, 'yes' if s.bam else '–', 'yes' if s.haplotypes_all else '–',
-                      'yes' if s.haplotypes else '–')
+        found.add_row(name, 'yes' if s.bam else '-', 'yes' if s.haplotypes_all else '-',
+                      'yes' if s.haplotypes else '-')
     console.print(found)
 
     settings = Table(title="Report Settings")

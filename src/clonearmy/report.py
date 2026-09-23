@@ -51,11 +51,11 @@ def get_mutations_from_haplotype(haplotype: str, reference_seq: str, count: int,
         })
     return mutations
 
-def fig_to_base64() -> str:
+def fig_to_base64(dpi: int = 120) -> str:
     """Convert matplotlib figure to base64 string."""
     try:
         buf = BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', dpi=300, backend='Agg')
+        plt.savefig(buf, format='png', bbox_inches='tight', dpi=dpi, backend='Agg')
         buf.seek(0)
         plt.close()
         return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
@@ -188,7 +188,7 @@ def create_mutation_spectrum(results: Dict[str, pd.DataFrame], reference_seq: st
             return ""
             
         # Create single mutation spectrum
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(7, 3))
         plt.subplot(1, 2, 1)
         types = sorted(mutation_types.keys())
         if not types:
@@ -201,10 +201,11 @@ def create_mutation_spectrum(results: Dict[str, pd.DataFrame], reference_seq: st
         percentages = [100 * c / total_mutations for c in counts]
         
         sns.barplot(x=types, y=percentages)
-        plt.title('Single Mutation Spectrum')
-        plt.xlabel('Mutation Type')
-        plt.ylabel('Percentage of Total Mutations')
-        plt.xticks(rotation=45)
+        plt.title('Single Mutation Spectrum', fontsize=11)
+        plt.xlabel('Mutation Type', fontsize=9)
+        plt.ylabel('% of mutations', fontsize=9)
+        plt.xticks(rotation=45, fontsize=8)
+        plt.yticks(fontsize=8)
         
         # Create linked mutation spectrum (top 10 most frequent)
         plt.subplot(1, 2, 2)
@@ -215,10 +216,11 @@ def create_mutation_spectrum(results: Dict[str, pd.DataFrame], reference_seq: st
                 double_percentages = [100 * c / total_mutations for c in double_counts]
                 
                 sns.barplot(x=list(range(len(double_types))), y=double_percentages)
-                plt.title('Top 10 Linked Mutations')
-                plt.xlabel('Mutation Pair')
-                plt.ylabel('Percentage of Total Mutations')
-                plt.xticks(range(len(double_types)), double_types, rotation=45, ha='right')
+                plt.title('Top 10 Linked Mutations', fontsize=11)
+                plt.xlabel('Mutation Pair', fontsize=9)
+                plt.ylabel('% of mutations', fontsize=9)
+                plt.xticks(range(len(double_types)), double_types, rotation=45, ha='right', fontsize=7)
+                plt.yticks(fontsize=8)
         
         plt.tight_layout()
         return fig_to_base64()
@@ -592,7 +594,7 @@ def create_depth_threshold_plot(thresholds: pd.DataFrame) -> str:
 def _qc_html(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return ""
-    return df.to_html(index=False, na_rep='–', float_format=lambda x: f"{x:,.2f}")
+    return df.to_html(index=False, na_rep='-', float_format=lambda x: f"{x:,.2f}")
 
 
 def _qc_sections(qc, parameters: Optional[Dict]) -> Dict[str, object]:
@@ -687,7 +689,8 @@ def generate_report(results: Dict[str, pd.DataFrame],
                     table { border-collapse: collapse; margin: 10px 0; }
                     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
                     th { background-color: #f5f5f5; }
-                    .plot { margin: 20px 0; }
+                    .plot { margin: 20px 0; max-width: 720px; }
+                    .plot img { max-width: 100%; height: auto; }
                     .warning { color: #856404; background-color: #fff3cd; padding: 10px; border-radius: 4px; }
                     .scroll { overflow-x: auto; }
                     .scroll table { font-size: 12px; }
@@ -747,18 +750,6 @@ def generate_report(results: Dict[str, pd.DataFrame],
                 {% endfor %}
                 {% endif %}
 
-                {% if single_variants_table %}
-                <h2>Single Variants</h2>
-                <p class="note">Every haplotype with exactly one mutation, aggregated by variant.
-                <i>full_length_reads</i> is the subset whose alignment spans the reference.</p>
-                <div class="scroll">{{ single_variants_table | safe }}</div>
-                {% endif %}
-
-                {% if sources_table %}
-                <h2>Data Sources</h2>
-                <div class="scroll">{{ sources_table | safe }}</div>
-                {% endif %}
-                
                 {% if mutation_freq_plot %}
                 <h2>Mutation Frequency</h2>
                 <div class="plot">{{ mutation_freq_plot | safe }}</div>
@@ -779,6 +770,18 @@ def generate_report(results: Dict[str, pd.DataFrame],
                 {% if indel_plot %}
                 <h2>Indel Distribution</h2>
                 <div class="plot">{{ indel_plot | safe }}</div>
+                {% endif %}
+
+                {% if single_variants_table %}
+                <h2>Single Variants</h2>
+                <p class="note">Every haplotype with exactly one mutation, aggregated by variant.
+                <i>full_length_reads</i> is the subset whose alignment spans the reference.</p>
+                <div class="scroll">{{ single_variants_table | safe }}</div>
+                {% endif %}
+
+                {% if sources_table %}
+                <h2>Data Sources</h2>
+                <div class="scroll">{{ sources_table | safe }}</div>
                 {% endif %}
             </body>
             </html>

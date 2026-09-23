@@ -162,7 +162,7 @@ Key options:
 | `--homopolymer-min-length` | 3 | Minimum reference run length treated as a homopolymer |
 | `--force-basecall` | off | Redo basecalling and demultiplexing even if outputs exist |
 | `--full-length-tolerance` | 5 | Bases a read may miss at either reference end and still be full length |
-| `--depth-thresholds` | `1,2,3,5,10,20,50,100` | Minimum read depths for the single-mutant coverage table |
+| `--depth-thresholds` | `10,100,1000,10000` | Minimum read depths for the single-mutant coverage table |
 | `--qc` / `--no-qc` | on | Read filtering, mutation load and depth-threshold tables |
 
 Nanopore error handling: even SUP reads carry a few errors per read, mostly homopolymer length errors. To keep these from fragmenting haplotype counts:
@@ -184,7 +184,7 @@ clonearmy process-bam sample.bam reference.fasta --platform ont -o results_ont
 
 - **Read filtering**: input reads, unmapped, mapped, supplementary (chimeras on Nanopore), low MAPQ, reads analysed, **full-length reads** (alignment spans the whole reference), full-length reads in haplotypes passing `--min-read-count`, read length, mean read Q, median alignment identity, and per-position depth (min/median/mean). Counts are reads for Nanopore and read pairs for Illumina.
 - **Mutations per read**: % of reads with 0, 1, 2, 3, 4 and 5+ mutations, for full-length reads and all reads.
-- **Single mutants by minimum read depth**: for each threshold in `--depth-thresholds` (default `1,2,3,5,10,20,50,100`), the number of haplotypes and reads kept, wild-type reads, and how many distinct single-mutation variants are supported by at least that many reads: SNVs (and % of the 3 × length possible), positions with an SNV, single deletions and insertions. For coding references (length divisible by 3, no internal stops) it adds synonymous SNVs, distinct missense amino-acid changes and nonsense codons, as % of those reachable by one nucleotide change. Computed separately for full-length reads and all reads.
+- **Single mutants by minimum read depth**: for each threshold in `--depth-thresholds` (default `10,100,1000,10000`), the number of haplotypes and reads kept, wild-type reads, and how many distinct single-mutation variants are supported by at least that many reads: SNVs (and % of the 3 × length possible), positions with an SNV, single deletions and insertions. For coding references (length divisible by 3, no internal stops) it adds synonymous SNVs, distinct missense amino-acid changes and nonsense codons, as % of those reachable by one nucleotide change. Computed separately for full-length reads and all reads.
 - **Single variants**: every single-mutation variant with its read and full-length read counts, codon and amino-acid change. The console shows the top variants; the full table is in `qc_single_variants.csv` and the HTML report.
 
 A read, or an Illumina read pair, is full length when its alignment starts within `--full-length-tolerance` bases (default 5) of the reference start and ends within that distance of the end, with no gap between mates. This matters for Nanopore: positions a truncated read does not cover are filled with the reference base, so without this check a partial read looks like a full-length wild-type or single-mutant read.
@@ -198,7 +198,7 @@ A read, or an Illumina read pair, is full length when its alignment starts withi
 clonearmy report results_ont reference.fasta
 
 # Different depth thresholds, report written elsewhere
-clonearmy report results_ont reference.fasta -d 1,3,5,10,25,50,100,250 -o report_v2
+clonearmy report results_ont reference.fasta -d 10,100,1000,10000 -o report_v2
 
 # Results from older CloneArmy versions: give the settings used for that run,
 # haplotypes are rebuilt from the BAMs and cached next to them
@@ -212,7 +212,7 @@ Each run now writes `{sample}_haplotypes_all.csv.gz` (all haplotypes, no read-co
 
 | Option | Default | Description |
 |---|---|---|
-| `--depth-thresholds`, `-d` | `1,2,3,5,10,20,50,100` | Minimum read depths for the single-mutant table |
+| `--depth-thresholds`, `-d` | `10,100,1000,10000` | Minimum read depths for the single-mutant table |
 | `--sample`, `-s` | all | Only report these samples (repeatable) |
 | `--bam` | none | Aligned BAMs stored outside the results directory (repeatable) |
 | `--platform`, `-p` | stored / detected | `illumina` or `ont` |

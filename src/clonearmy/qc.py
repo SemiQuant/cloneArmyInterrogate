@@ -21,7 +21,7 @@ from .processor import (AmpliconProcessor, ALL_HAPLOTYPES_SUFFIX, HAPLOTYPES_SUF
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DEPTHS = (1, 2, 3, 5, 10, 20, 50, 100)
+DEFAULT_DEPTHS = (10, 100, 1000, 10000)
 DEFAULT_DEPTHS_STR = ','.join(str(d) for d in DEFAULT_DEPTHS)
 
 PLATFORM_DEFAULTS = {
